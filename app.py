@@ -26,10 +26,45 @@ from sklearn.feature_selection import (
 )
 import warnings
 warnings.filterwarnings('ignore')
+import matplotlib.font_manager as fm
+import os
 
-# 设置中文字体支持
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+# 设置中文字体支持（兼容本地Windows和Streamlit Cloud Linux环境）
+def setup_chinese_font():
+    """配置matplotlib中文字体"""
+    # 尝试的字体列表（按优先级排序）
+    font_list = [
+        'WenQuanYi Zen Hei',      # Linux (Streamlit Cloud)
+        'WenQuanYi Micro Hei',    # Linux (Streamlit Cloud)
+        'SimHei',                  # Windows
+        'Microsoft YaHei',         # Windows
+        'Noto Sans CJK SC',        # 通用
+        'DejaVu Sans'              # 备用
+    ]
+    
+    # 获取系统可用字体
+    available_fonts = set([f.name for f in fm.fontManager.ttflist])
+    
+    # 找到第一个可用的中文字体
+    selected_font = None
+    for font in font_list:
+        if font in available_fonts:
+            selected_font = font
+            break
+    
+    if selected_font:
+        plt.rcParams['font.sans-serif'] = [selected_font] + font_list
+    else:
+        plt.rcParams['font.sans-serif'] = font_list
+    
+    plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
+# 刷新字体缓存并设置字体
+try:
+    fm._load_fontmanager(try_read_cache=False)
+except:
+    pass
+setup_chinese_font()
 
 # 设置页面配置
 st.set_page_config(
