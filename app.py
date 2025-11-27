@@ -383,9 +383,85 @@ def page_feature_selection(df):
     
     method = st.selectbox(
         "选择特征筛选方法：",
-        ["单变量统计检验 (ANOVA F-test)", "互信息 (Mutual Information)", 
+        ["手动选择特征", "单变量统计检验 (ANOVA F-test)", "互信息 (Mutual Information)", 
          "递归特征消除 (RFE)", "基于随机森林的重要性"]
     )
+    
+    # 手动选择特征模式
+    if method == "手动选择特征":
+        st.markdown("""
+        <div class="info-box">
+        <b>📖 手动选择特征：</b><br>
+        根据您的专业知识和临床经验，手动选择您认为对AKI预测最重要的特征。
+        这种方法可以结合领域专家的先验知识，选择有临床意义的变量。
+        </div>
+        """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        st.subheader("📋 选择特征")
+        
+        # 按类别分组显示特征
+        col1, col2, col3 = st.columns(3)
+        
+        # 特征分类
+        patient_features = ['age', 'female', 'height_cm', 'weight_kg', 'baseline_scr_mgdl', 'creatinine_clearance']
+        comorbidity_features = ['ckd', 'diabetes', 'hypertension', 'heart_failure', 'icu_admit', 'sepsis', 'hypotension', 'dehydration_flag']
+        drug_features = ['vanco_use', 'vanco_trough', 'pip_tazo_use', 'aminoglycoside_use', 'nsaid_use', 'loop_diuretic_use', 'contrast_use']
+        
+        with col1:
+            st.markdown("**👤 患者基本信息**")
+            selected_patient = []
+            for feat in patient_features:
+                if feat in feature_cols:
+                    desc = FEATURE_DESCRIPTIONS.get(feat, feat)
+                    if st.checkbox(desc, value=True, key=f"manual_{feat}"):
+                        selected_patient.append(feat)
+        
+        with col2:
+            st.markdown("**🏥 合并症**")
+            selected_comorbidity = []
+            for feat in comorbidity_features:
+                if feat in feature_cols:
+                    desc = FEATURE_DESCRIPTIONS.get(feat, feat)
+                    if st.checkbox(desc, value=True, key=f"manual_{feat}"):
+                        selected_comorbidity.append(feat)
+        
+        with col3:
+            st.markdown("**💊 肾毒性药物**")
+            selected_drug = []
+            for feat in drug_features:
+                if feat in feature_cols:
+                    desc = FEATURE_DESCRIPTIONS.get(feat, feat)
+                    if st.checkbox(desc, value=True, key=f"manual_{feat}"):
+                        selected_drug.append(feat)
+        
+        # 汇总选择的特征
+        manual_selected = selected_patient + selected_comorbidity + selected_drug
+        
+        st.markdown("---")
+        
+        # 显示选择统计
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("患者信息", f"{len(selected_patient)}/{len([f for f in patient_features if f in feature_cols])}")
+        with col2:
+            st.metric("合并症", f"{len(selected_comorbidity)}/{len([f for f in comorbidity_features if f in feature_cols])}")
+        with col3:
+            st.metric("药物特征", f"{len(selected_drug)}/{len([f for f in drug_features if f in feature_cols])}")
+        with col4:
+            st.metric("总计选择", f"{len(manual_selected)}/{len(feature_cols)}")
+        
+        # 确认按钮
+        if st.button("✅ 确认选择", type="primary"):
+            if len(manual_selected) < 1:
+                st.error("❌ 请至少选择1个特征！")
+            else:
+                st.session_state['selected_features'] = manual_selected
+                st.success(f"✅ 已选择 {len(manual_selected)} 个特征：")
+                st.write(", ".join([f"**{f}**" for f in manual_selected]))
+                st.info("💡 请前往 **🤖 模型训练** 页面使用选择的特征训练模型！")
+        
+        return  # 手动选择模式不执行后续的自动筛选逻辑
     
     n_features = st.slider("选择保留的特征数量：", 3, len(feature_cols), 10)
     
