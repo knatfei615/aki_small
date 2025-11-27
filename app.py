@@ -27,6 +27,10 @@ from sklearn.feature_selection import (
 import warnings
 warnings.filterwarnings('ignore')
 
+# 设置中文字体支持
+plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'WenQuanYi Micro Hei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
+
 # 设置页面配置
 st.set_page_config(
     page_title="AKI预测 - 机器学习教学平台！！！",
