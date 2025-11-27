@@ -68,7 +68,7 @@ setup_chinese_font()
 
 # 设置页面配置
 st.set_page_config(
-    page_title="AKI预测 - 机器学习教学平台！！！",
+    page_title="PSCP WORKSHOP: 急性肾损伤(AKI)预测",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -162,7 +162,7 @@ FEATURE_DESCRIPTIONS = {
 # ============== 主程序 ==============
 def main():
     # 标题
-    st.markdown('<h1 class="main-header">🏥 急性肾损伤(AKI)预测</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">PSCP WORKSHOP: 急性肾损伤(AKI)预测</h1>', unsafe_allow_html=True)
     st.markdown('<p class="sub-header">机器学习教学平台 | 面向药学专业人员</p>', unsafe_allow_html=True)
     
     # 加载数据
@@ -195,7 +195,7 @@ def main():
 
 def page_intro():
     """课程介绍页面"""
-    st.header("👋 欢迎来到机器学习教学平台")
+    st.header("欢迎: 你将在这里完成你的AKI-SMALL竞赛项目")
     
     st.markdown("""
     <div class="info-box">
