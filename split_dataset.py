@@ -20,8 +20,8 @@ def make_kaggle_splits(
     将单一 CSV 拆分为 Kaggle 常见的 data/ 目录结构:
     - train.csv: 包含特征 + 目标
     - test.csv: 仅包含特征（去掉目标列）
-    - solution.csv: 仅评测用，包含 test 集的 Id + 真实标签
-    - sample_submission.csv: 参赛者提交格式模板 (Id + 目标列，占位值)
+    - solution.csv: 仅评测用，包含 test 集的 id + 真实标签
+    - sample_submission.csv: 参赛者提交格式模板 (id + 目标列，占位值)
 
     返回:
         dict，键为文件名，值为输出路径
@@ -32,8 +32,8 @@ def make_kaggle_splits(
         raise ValueError("test_size 应位于 (0, 1) 区间内")
 
     df = pd.read_csv(input_path)
-    if "Id" not in df.columns:
-        raise ValueError("数据集中缺少 Kaggle 常用的 'Id' 列")
+    if "id" not in df.columns:
+        raise ValueError("数据集中缺少 Kaggle 常用的 'id' 列")
     if target_col not in df.columns:
         raise ValueError(f"目标列 '{target_col}' 不存在于数据集中")
 
@@ -57,8 +57,9 @@ def make_kaggle_splits(
     test_features = test_df.drop(columns=[target_col])
     test_features.to_csv(test_path, index=False)
 
-    # solution（Id + 真实标签，留作私下评测）
-    solution_df = test_df[["Id", target_col]].sort_values("Id")
+    # solution（id + 真实标签，留作私下评测）
+    solution_df = test_df[["id", target_col]].sort_values("id")
+    solution_df["Usage"] = "public"  # 新增 Usage 列，全部填充为 public
     solution_df.to_csv(solution_path, index=False)
 
     # sample submission（同列，填充占位值）

@@ -65,31 +65,36 @@ def make_synthetic(n=5000, random_state=42):
     contrast = rng.binomial(1, 0.20, n)
     
     # --- 8. 生成 AKI 标签 (Latent Risk Model) ---
-    # 调整逻辑：加入肌酐清除率的影响。CrCl越低，风险越高。
+    # 调整逻辑：加入肌酐清除率的影响、交互项和非线性项
     # 系数选择是为了保持约 ~20-25% 的AKI发生率
     z = (
-        -1.5
+        -1.8
         + 0.015 * (age - 65)
-        + 0.40 * ckd
-        - 0.02 * (crcl - 80)      # 新增: CrCl每降低1单位，风险增加 (基准80)
-        + 0.65 * sepsis
-        + 0.60 * hypotension
-        + 0.45 * contrast
-        + 0.55 * vanco_use
-        + 0.045 * (vanco_trough - 12)
-        + 0.40 * piptazo
-        + 0.55 * aminogly
-        + 0.30 * nsaid
-        + 0.35 * loop_diur
-        + 0.20 * dehydration
+        + 0.0008 * (age - 65) ** 2          # 非线性年龄效应
+        + 0.35 * ckd
+        - 0.015 * (crcl - 80)               # CrCl每降低1单位，风险增加 (基准80)
+        + 0.55 * sepsis
+        + 0.50 * hypotension
+        + 0.35 * contrast
+        + 0.25 * dehydration * contrast     # 交互项：脱水+造影剂风险更高
+        + 0.40 * vanco_use
+        + 0.035 * vanco_use * (vanco_trough - 12)  # 修复：只在使用万古霉素时计算谷浓度影响
+        + 0.30 * piptazo
+        + 0.50 * vanco_use * piptazo        # 交互项：万古+哌拉西林的协同肾毒性
+        + 0.45 * aminogly
+        + 0.20 * nsaid
+        + 0.25 * nsaid * ckd                # 交互项：CKD患者用NSAID风险更高
+        + 0.30 * loop_diur
+        + 0.15 * dehydration
         + 0.10 * icu
-        + 0.10 * diabetes
+        + 0.08 * diabetes
     )
     p = 1 / (1 + np.exp(-z))
     aki = rng.binomial(1, p, n)
     
     # --- 9. 构建 DataFrame ---
     df = pd.DataFrame({
+        "id": np.arange(1, n + 1),  # 从1开始的顺序ID
         "age": age.round(1),
         "female": female,
         "height_cm": height.round(1),          # 新增字段
@@ -120,7 +125,7 @@ if __name__ == "__main__":
     # 测试数据生成功能
     import os
     print("正在生成包含身高和肌酐清除率的合成数据集...")
-    df = make_synthetic(n=5000)
+    df = make_synthetic(n=10000)
     
     print(f"\n数据集形状: {df.shape}")
     print(f"AKI患病率: {df['aki_48h'].mean():.3f}")
