@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore')
 
 # 设置页面配置
 st.set_page_config(
-    page_title="AKI预测 - 机器学习教学平台",
+    page_title="AKI预测 - 机器学习教学平台！！！",
     page_icon="🏥",
     layout="wide",
     initial_sidebar_state="expanded"
