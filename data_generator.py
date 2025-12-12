@@ -65,32 +65,57 @@ def make_synthetic(n=5000, random_state=42):
     contrast = rng.binomial(1, 0.20, n)
     
     # --- 8. 生成 AKI 标签 (Latent Risk Model) ---
-    # 调整逻辑：加入肌酐清除率的影响、交互项和非线性项
-    # 系数选择是为了保持约 ~20-25% 的AKI发生率
+    # 说明：依然采用 logistic 生成(概率=σ(z))，但 z 使用了分段阈值/饱和/随机易感性等非线性结构，
+    # 比“纯线性系数加和”更贴近临床风险在极端区间陡增、药物毒性饱和、未观测个体差异的特点。
+    #
+    # 系数选择目标：维持约 ~20-25% 的AKI发生率（随机种子不同会有小幅波动）
+    age_c = age - 65
+    age_hi = np.maximum(age - 80, 0)  # 高龄额外风险（阈值效应）
+
+    # CrCl 的非线性：<80 开始抬升，<50 明显陡增（分段/铰链函数）
+    crcl_low = np.maximum(80 - crcl, 0)
+    crcl_very_low = np.maximum(50 - crcl, 0)
+
+    # 万古霉素谷浓度：毒性存在“饱和”，用 tanh 模拟（仅在使用时生效）
+    vanco_tox = vanco_use * np.tanh((vanco_trough - 12) / 6)
+
+    # 未观测个体易感性（随机效应/“体质”），让同样特征的人也会有不同风险
+    frailty = rng.normal(0, 0.35, n)
+
     z = (
-        -1.8
-        + 0.015 * (age - 65)
-        + 0.0008 * (age - 65) ** 2          # 非线性年龄效应
-        + 0.35 * ckd
-        - 0.015 * (crcl - 80)               # CrCl每降低1单位，风险增加 (基准80)
+        -3.35
+        + 0.018 * age_c
+        + 0.0010 * age_c ** 2
+        + 0.020 * age_hi
+        + 0.30 * ckd
+        + 0.55 * (crcl_low / 20)
+        + 0.45 * (crcl_very_low / 10)
+        + 0.10 * np.log1p(base_scr)         # Scr 的残余信息（与CrCl不完全重复）
         + 0.55 * sepsis
-        + 0.50 * hypotension
+        + 0.55 * hypotension
+        + 0.12 * icu
+        + 0.10 * diabetes
+        + 0.22 * heart_failure
         + 0.35 * contrast
-        + 0.25 * dehydration * contrast     # 交互项：脱水+造影剂风险更高
-        + 0.40 * vanco_use
-        + 0.035 * vanco_use * (vanco_trough - 12)  # 修复：只在使用万古霉素时计算谷浓度影响
-        + 0.30 * piptazo
-        + 0.50 * vanco_use * piptazo        # 交互项：万古+哌拉西林的协同肾毒性
-        + 0.45 * aminogly
-        + 0.20 * nsaid
-        + 0.25 * nsaid * ckd                # 交互项：CKD患者用NSAID风险更高
-        + 0.30 * loop_diur
-        + 0.15 * dehydration
-        + 0.10 * icu
-        + 0.08 * diabetes
+        + 0.25 * contrast * ckd
+        + 0.25 * dehydration * contrast
+        + 0.18 * dehydration
+        + 0.38 * vanco_use
+        + 0.40 * vanco_tox
+        + 0.28 * piptazo
+        + 0.55 * vanco_use * piptazo
+        + 0.50 * aminogly
+        + 0.18 * nsaid
+        + 0.28 * nsaid * ckd
+        + 0.28 * loop_diur
+        + frailty
     )
     p = 1 / (1 + np.exp(-z))
     aki = rng.binomial(1, p, n)
+
+    # 轻微标签噪声：模拟AKI判定/记录误差（不会改变特征分布，只增加任务难度与真实性）
+    flip = rng.binomial(1, 0.015, n)
+    aki = np.where(flip == 1, 1 - aki, aki)
     
     # --- 9. 构建 DataFrame ---
     df = pd.DataFrame({
@@ -142,7 +167,7 @@ if __name__ == "__main__":
         print(df[new_fields].describe())
     else:
         missing = [f for f in new_fields if f not in df.columns]
-        print(f"⚠ 警告: 以下字段缺失: {missing}")
+        print(f"[WARNING] 以下字段缺失: {missing}")
     
     print("\n前5行数据:")
     print(df.head())
@@ -152,7 +177,7 @@ if __name__ == "__main__":
     try:
         # 如果文件已存在，询问是否覆盖
         if os.path.exists(output_file):
-            print(f"\n⚠ 文件 {output_file} 已存在，将被覆盖")
+            print(f"\n[WARNING] 文件 {output_file} 已存在，将被覆盖")
             print(f"   旧文件大小: {os.path.getsize(output_file):,} 字节")
         
         df.to_csv(output_file, index=False, encoding='utf-8-sig')
@@ -162,19 +187,19 @@ if __name__ == "__main__":
             file_size = os.path.getsize(output_file)
             # 读取验证
             df_check = pd.read_csv(output_file, nrows=1)
-            print(f"\n✓ 数据已成功导出到: {output_file}")
+            print(f"\n[OK] 数据已成功导出到: {output_file}")
             print(f"  文件大小: {file_size:,} 字节")
             print(f"  导出字段数: {len(df_check.columns)}")
             
             # 检查新字段是否在导出的文件中
             missing_in_file = [f for f in new_fields if f not in df_check.columns]
             if missing_in_file:
-                print(f"  ⚠ 警告: 以下新字段未在CSV中找到: {missing_in_file}")
+                print(f"  [WARNING] 以下新字段未在CSV中找到: {missing_in_file}")
             else:
-                print(f"  ✓ 所有新字段已成功导出: {new_fields}")
+                print(f"  [OK] 所有新字段已成功导出: {new_fields}")
         else:
-            print(f"\n✗ 错误: 文件 {output_file} 导出后未找到")
+            print(f"\n[ERROR] 文件 {output_file} 导出后未找到")
     except Exception as e:
-        print(f"\n✗ 导出错误: {e}")
+        print(f"\n[ERROR] 导出错误: {e}")
         import traceback
         traceback.print_exc()
