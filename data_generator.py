@@ -63,7 +63,7 @@ def make_synthetic(n=5000, random_state=42):
     nsaid = rng.binomial(1, 0.10, n)
     loop_diur = rng.binomial(1, 0.25, n)
     contrast = rng.binomial(1, 0.20, n)
-    
+      
     # --- 8. 生成 AKI 标签 (Latent Risk Model) ---
     # 说明：依然采用 logistic 生成(概率=σ(z))，但 z 使用了分段阈值/饱和/随机易感性等非线性结构，
     # 比“纯线性系数加和”更贴近临床风险在极端区间陡增、药物毒性饱和、未观测个体差异的特点。

@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -21,6 +21,7 @@ from sklearn.metrics import (
     precision_recall_curve, confusion_matrix, classification_report,
     accuracy_score, f1_score
 )
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.feature_selection import (
     SelectKBest, f_classif, mutual_info_classif, RFE
 )
@@ -359,7 +360,8 @@ def page_data_exploration(df):
     """, unsafe_allow_html=True)
     
     # 计算相关性
-    feature_cols = [c for c in df.columns if c not in ['Id']]
+    # 注意：数据集主键列为小写 `id`
+    feature_cols = [c for c in df.columns if c not in ['id']]
     corr_matrix = df[feature_cols].corr()
     
     fig, ax = plt.subplots(figsize=(14, 10))
@@ -404,7 +406,7 @@ def page_feature_selection(df):
     """, unsafe_allow_html=True)
     
     # 准备数据
-    feature_cols = [c for c in df.columns if c not in ['Id', 'aki_48h']]
+    feature_cols = [c for c in df.columns if c not in ['id', 'aki_48h']]
     X = df[feature_cols].copy()
     y = df['aki_48h'].astype(int)
     
@@ -640,7 +642,7 @@ def page_model_training(df):
     """, unsafe_allow_html=True)
     
     # 准备数据
-    feature_cols = [c for c in df.columns if c not in ['Id', 'aki_48h']]
+    feature_cols = [c for c in df.columns if c not in ['id', 'aki_48h']]
     
     # 检查是否有选择的特征
     if 'selected_features' in st.session_state:
@@ -676,19 +678,15 @@ def page_model_training(df):
     model_options = {
         "逻辑回归 (Logistic Regression)": {
             "description": "经典的线性分类模型，可解释性强，适合作为基线模型",
-            "model": LogisticRegression(max_iter=200, class_weight='balanced', solver='liblinear')
         },
         "随机森林 (Random Forest)": {
             "description": "集成多棵决策树，抗过拟合能力强，可以捕捉非线性关系",
-            "model": RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
         },
         "梯度提升 (Gradient Boosting)": {
             "description": "迭代地训练决策树来纠正错误，通常能取得很好的预测效果",
-            "model": GradientBoostingClassifier(n_estimators=100, random_state=42)
         },
         "支持向量机 (SVM)": {
             "description": "在高维空间寻找最优分隔超平面，适合中小规模数据",
-            "model": SVC(probability=True, class_weight='balanced', random_state=42)
         }
     }
     
@@ -701,29 +699,172 @@ def page_model_training(df):
     </div>
     """, unsafe_allow_html=True)
     
+    def build_estimator(selected_model_key: str, params: dict, rs: int):
+        """根据模型类型与参数构建分类器实例。"""
+        if "逻辑回归" in selected_model_key:
+            return LogisticRegression(
+                max_iter=int(params.get("max_iter", 300)),
+                class_weight="balanced",
+                solver="liblinear",
+                C=float(params.get("C", 1.0)),
+                penalty=str(params.get("penalty", "l2")),
+                random_state=rs,
+            )
+        if "随机森林" in selected_model_key:
+            return RandomForestClassifier(
+                n_estimators=int(params.get("n_estimators", 200)),
+                max_depth=params.get("max_depth", None),
+                min_samples_leaf=int(params.get("min_samples_leaf", 1)),
+                max_features=params.get("max_features", "sqrt"),
+                class_weight="balanced",
+                random_state=rs,
+                n_jobs=-1,
+            )
+        if "梯度提升" in selected_model_key:
+            return GradientBoostingClassifier(
+                n_estimators=int(params.get("n_estimators", 200)),
+                learning_rate=float(params.get("learning_rate", 0.05)),
+                max_depth=int(params.get("max_depth", 3)),
+                subsample=float(params.get("subsample", 1.0)),
+                random_state=rs,
+            )
+        # SVM
+        return SVC(
+            probability=True,
+            class_weight="balanced",
+            random_state=rs,
+            C=float(params.get("C", 1.0)),
+            kernel=str(params.get("kernel", "rbf")),
+            gamma=str(params.get("gamma", "scale")),
+        )
+
+    def build_training_pipeline(selected_model_key: str, params: dict, rs: int):
+        """构建包含缺失值填充与（可选）标准化的训练流水线，避免数据泄漏。"""
+        clf = build_estimator(selected_model_key, params=params, rs=rs)
+        need_scaler = any(
+            k in selected_model_key
+            for k in ["逻辑回归", "SVM", "支持向量机"]
+        )
+        steps = [("imputer", SimpleImputer(strategy="median"))]
+        steps.append(("scaler", StandardScaler() if need_scaler else "passthrough"))
+        steps.append(("clf", clf))
+        return Pipeline(steps=steps)
+
+    st.markdown("---")
+    st.subheader("🛠️ 傻瓜式调参（可选）")
+    with st.expander("点击展开：调参面板", expanded=False):
+        enable_tuning = st.checkbox("启用调参", value=False)
+        tune_mode = st.radio("调参方式", ["手动滑块（最简单）", "一键自动调参（推荐）"], horizontal=True, disabled=not enable_tuning)
+
+        # 手动参数（给非专业用户：少数关键参数）
+        manual_params: dict = {}
+        if enable_tuning and tune_mode == "手动滑块（最简单）":
+            if "逻辑回归" in selected_model:
+                manual_params["C"] = st.slider("正则强度 C（越大越不正则）", 0.01, 10.0, 1.0, 0.01)
+                manual_params["penalty"] = st.selectbox("正则类型", ["l2", "l1"])
+            elif "随机森林" in selected_model:
+                manual_params["n_estimators"] = st.slider("树的数量", 50, 600, 200, 50)
+                max_depth_choice = st.selectbox("最大深度", ["不限制", 3, 5, 8, 12, 20])
+                manual_params["max_depth"] = None if max_depth_choice == "不限制" else int(max_depth_choice)
+                manual_params["min_samples_leaf"] = st.slider("叶子最小样本数", 1, 20, 1, 1)
+                manual_params["max_features"] = st.selectbox("每次分裂使用特征数", ["sqrt", "log2"])
+            elif "梯度提升" in selected_model:
+                manual_params["n_estimators"] = st.slider("弱学习器数量", 50, 600, 200, 50)
+                manual_params["learning_rate"] = st.slider("学习率", 0.01, 0.3, 0.05, 0.01)
+                manual_params["max_depth"] = st.slider("单棵树最大深度", 1, 5, 3, 1)
+                manual_params["subsample"] = st.slider("子采样比例", 0.5, 1.0, 1.0, 0.05)
+            else:  # SVM
+                manual_params["C"] = st.slider("惩罚系数 C", 0.01, 20.0, 1.0, 0.01)
+                manual_params["kernel"] = st.selectbox("核函数", ["rbf", "linear"])
+                manual_params["gamma"] = st.selectbox("gamma（RBF核常用）", ["scale", "auto"], disabled=(manual_params["kernel"] == "linear"))
+
+        # 自动调参设置
+        auto_cfg = {
+            "n_iter": 12,
+            "cv": 5,
+            "scoring": "roc_auc",
+        }
+        if enable_tuning and tune_mode == "一键自动调参（推荐）":
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                auto_cfg["n_iter"] = st.slider("搜索次数", 6, 30, 12, 2)
+            with col_b:
+                auto_cfg["cv"] = st.slider("交叉验证折数", 3, 8, 5, 1)
+            with col_c:
+                auto_cfg["scoring"] = st.selectbox("优化指标", ["roc_auc", "average_precision"])
+            st.caption("提示：这是一个小范围搜索，适合课堂演示与快速拿到更好的 baseline。")
+
     # 训练按钮
     if st.button("🚀 开始训练模型", type="primary"):
         with st.spinner("正在训练模型..."):
-            # 数据预处理
-            X_filled = X.fillna(X.median())
-            
             # 分割数据
             X_train, X_val, y_train, y_val = train_test_split(
-                X_filled, y, test_size=test_size, stratify=y, random_state=random_state
+                X, y, test_size=test_size, stratify=y, random_state=random_state
             )
-            
-            # 标准化
-            scaler = StandardScaler()
-            X_train_scaled = scaler.fit_transform(X_train)
-            X_val_scaled = scaler.transform(X_val)
-            
-            # 训练模型
-            model = model_options[selected_model]['model']
-            model.fit(X_train_scaled, y_train)
-            
+
+            # 决定使用的参数
+            best_params_for_model: dict = {}
+            if enable_tuning and tune_mode == "手动滑块（最简单）":
+                best_params_for_model = manual_params
+
+            # 自动调参：在训练集上用 CV 搜索最优参数
+            if enable_tuning and tune_mode == "一键自动调参（推荐）":
+                base_pipe = build_training_pipeline(selected_model, params={}, rs=random_state)
+                if "逻辑回归" in selected_model:
+                    param_dist = {
+                        "clf__C": np.logspace(-2, 1, 20),
+                        "clf__penalty": ["l1", "l2"],
+                    }
+                elif "随机森林" in selected_model:
+                    param_dist = {
+                        "clf__n_estimators": [100, 200, 300, 500],
+                        "clf__max_depth": [None, 5, 8, 12, 20],
+                        "clf__min_samples_leaf": [1, 2, 4, 8, 12],
+                        "clf__max_features": ["sqrt", "log2"],
+                    }
+                elif "梯度提升" in selected_model:
+                    param_dist = {
+                        "clf__n_estimators": [100, 200, 300, 500],
+                        "clf__learning_rate": [0.01, 0.03, 0.05, 0.1, 0.2],
+                        "clf__max_depth": [2, 3, 4],
+                        "clf__subsample": [0.6, 0.8, 1.0],
+                    }
+                else:  # SVM
+                    # 注意：linear 核不使用 gamma；这里仍保留 gamma 选项，sklearn 会忽略它
+                    param_dist = {
+                        "clf__C": np.logspace(-2, 1.3, 25),
+                        "clf__kernel": ["rbf", "linear"],
+                        "clf__gamma": ["scale", "auto"],
+                    }
+
+                cv_inner = StratifiedKFold(n_splits=int(auto_cfg["cv"]), shuffle=True, random_state=random_state)
+                search = RandomizedSearchCV(
+                    estimator=base_pipe,
+                    param_distributions=param_dist,
+                    n_iter=int(auto_cfg["n_iter"]),
+                    scoring=str(auto_cfg["scoring"]),
+                    cv=cv_inner,
+                    random_state=random_state,
+                    n_jobs=-1,
+                    refit=True,
+                )
+                search.fit(X_train, y_train)
+                st.success(f"✅ 自动调参完成：最佳 {auto_cfg['scoring']} = {search.best_score_:.3f}")
+                st.write("**最佳参数：**", search.best_params_)
+
+                # 直接用 search.best_estimator_ 作为最终 pipeline
+                pipeline = search.best_estimator_
+                # 记录方便展示
+                st.session_state["best_params"] = search.best_params_
+            else:
+                # 构建并训练流水线（缺失值填充 + 可选标准化 + 分类器）
+                pipeline = build_training_pipeline(selected_model, params=best_params_for_model, rs=random_state)
+                pipeline.fit(X_train, y_train)
+                st.session_state["best_params"] = {f"clf__{k}": v for k, v in best_params_for_model.items()}
+
             # 在验证集上预测
-            y_pred = model.predict(X_val_scaled)
-            y_proba = model.predict_proba(X_val_scaled)[:, 1]
+            y_pred = pipeline.predict(X_val)
+            y_proba = pipeline.predict_proba(X_val)[:, 1]
             
             # 计算指标
             accuracy = accuracy_score(y_val, y_pred)
@@ -731,18 +872,18 @@ def page_model_training(df):
             f1 = f1_score(y_val, y_pred)
             auprc = average_precision_score(y_val, y_proba)
             
-            # 交叉验证
-            cv_scores = cross_val_score(model, X_train_scaled, y_train, cv=5, scoring='roc_auc')
+            # 交叉验证（在每折内独立拟合预处理，避免数据泄漏）
+            cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+            cv_scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring='roc_auc')
             
             # 保存到session state
-            st.session_state['model'] = model
-            st.session_state['scaler'] = scaler
+            st.session_state['pipeline'] = pipeline
             st.session_state['feature_cols'] = feature_cols
             st.session_state['X_val'] = X_val
             st.session_state['y_val'] = y_val
             st.session_state['y_proba'] = y_proba
             st.session_state['y_pred'] = y_pred
-            st.session_state['train_median'] = X.median()  # 保存训练集中位数供预测使用
+            st.session_state['selected_model_name'] = selected_model
             
             # 显示结果
             st.markdown("---")
@@ -787,7 +928,7 @@ def page_model_evaluation(df):
     st.header("📈 模型评估")
     
     # 检查是否有已训练的模型
-    if 'model' not in st.session_state:
+    if 'pipeline' not in st.session_state:
         st.warning("⚠️ 请先在 **🤖 模型训练** 页面训练一个模型！")
         return
     
@@ -976,7 +1117,7 @@ def page_prediction_demo(df):
     st.header("🎯 预测演示")
     
     # 检查是否有已训练的模型
-    if 'model' not in st.session_state:
+    if 'pipeline' not in st.session_state:
         st.warning("⚠️ 请先在 **🤖 模型训练** 页面训练一个模型！")
         return
     
@@ -987,8 +1128,7 @@ def page_prediction_demo(df):
     </div>
     """, unsafe_allow_html=True)
     
-    model = st.session_state['model']
-    scaler = st.session_state['scaler']
+    pipeline = st.session_state['pipeline']
     feature_cols = st.session_state['feature_cols']
     
     st.markdown("---")
@@ -1038,16 +1178,15 @@ def page_prediction_demo(df):
         # 只选择模型使用的特征
         input_df = input_df[[c for c in feature_cols if c in input_df.columns]]
         
-        # 如果有缺失的特征，用0填充
+        # 如果有缺失的特征，用 NaN 填充（由训练时的 SimpleImputer 统一处理）
         for c in feature_cols:
             if c not in input_df.columns:
-                input_df[c] = 0
+                input_df[c] = np.nan
         
         input_df = input_df[feature_cols]
         
-        # 标准化并预测
-        input_scaled = scaler.transform(input_df)
-        probability = model.predict_proba(input_scaled)[0, 1]
+        # 预测（预处理在 pipeline 内完成）
+        probability = pipeline.predict_proba(input_df)[0, 1]
         prediction = "高风险" if probability >= 0.5 else "低风险"
         
         # 显示结果
@@ -1135,23 +1274,14 @@ def page_prediction_demo(df):
             
             # 准备特征
             test_features = test_df[feature_cols].copy()
-            
-            # 使用训练集中位数填充缺失值
-            if 'train_median' in st.session_state:
-                for col in feature_cols:
-                    if col in test_features.columns:
-                        test_features[col] = test_features[col].fillna(st.session_state['train_median'].get(col, 0))
-            else:
-                test_features = test_features.fillna(0)
-            
-            # 标准化并预测
-            test_scaled = scaler.transform(test_features)
-            test_proba = model.predict_proba(test_scaled)[:, 1]
+
+            # 预测（缺失值填充等预处理在 pipeline 内完成）
+            test_proba = pipeline.predict_proba(test_features)[:, 1]
             test_pred = (test_proba >= 0.5).astype(int)
             
             # 创建结果DataFrame
             result_df = pd.DataFrame({
-                'Id': test_df['Id'],
+                'id': test_df['id'],
                 'aki_48h_probability': test_proba,
                 'aki_48h_prediction': test_pred
             })
@@ -1191,6 +1321,54 @@ def page_prediction_demo(df):
                 label="📥 下载预测结果 (CSV)",
                 data=csv,
                 file_name="test_predictions.csv",
+                mime="text/csv"
+            )
+
+            st.markdown("---")
+            st.subheader("🏁 Kaggle 提交文件（submission.csv）")
+            st.markdown("""
+            <div class="info-box">
+            <b>💡 提交格式说明</b><br>
+            Kaggle 通常需要两列：<b>id</b> 和 <b>aki_48h</b>（建议填写发生 AKI 的概率）。
+            </div>
+            """, unsafe_allow_html=True)
+
+            submit_type = st.radio(
+                "提交内容",
+                ["提交概率（推荐）", "提交0/1标签（不推荐）"],
+                horizontal=True,
+            )
+            align_sample = st.checkbox("对齐 sample_submission.csv（如果存在就用它的列顺序）", value=True)
+
+            if submit_type == "提交概率（推荐）":
+                sub_value = test_proba
+            else:
+                sub_value = test_pred
+
+            submission_df = pd.DataFrame({
+                "id": test_df["id"],
+                "aki_48h": sub_value,
+            }).sort_values("id")
+
+            # 如果用户希望对齐 sample_submission 的列/结构
+            if align_sample:
+                try:
+                    sample_df = pd.read_csv("splits/sample_submission.csv")
+                    # 仅保留 Kaggle 常用列（忽略 Usage 等扩展列）
+                    cols = [c for c in sample_df.columns if c in submission_df.columns]
+                    if cols:
+                        submission_df = submission_df[cols]
+                except Exception:
+                    pass
+
+            st.markdown("**submission 预览：**")
+            st.dataframe(submission_df.head(20), use_container_width=True)
+
+            submission_csv = submission_df.to_csv(index=False)
+            st.download_button(
+                label="⬇️ 下载 Kaggle submission.csv",
+                data=submission_csv,
+                file_name="submission.csv",
                 mime="text/csv"
             )
             
