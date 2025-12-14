@@ -1,0 +1,32 @@
+[server]
+# 限制最大上传文件大小（MB）
+maxUploadSize = 50
+
+# 启用CORS以便在不同域名访问
+enableCORS = false
+
+# 禁用 XSRF 保护以减少内存占用
+enableXsrfProtection = false
+
+[browser]
+# 收集使用统计信息
+gatherUsageStats = false
+
+[runner]
+# 当脚本更改时快速重新运行
+fastReruns = true
+
+# 限制魔法命令以减少内存占用
+magicEnabled = false
+
+[client]
+# 显示错误详细信息
+showErrorDetails = true
+
+[logger]
+# 日志级别
+level = "warning"
+
+[deprecation]
+# 隐藏弃用警告
+showPyplotGlobalUse = false

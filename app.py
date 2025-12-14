@@ -29,6 +29,12 @@ import warnings
 warnings.filterwarnings('ignore')
 import matplotlib.font_manager as fm
 import os
+import gc  # 垃圾回收
+
+# 优化内存使用
+os.environ['OMP_NUM_THREADS'] = '2'  # 限制线程数
+os.environ['OPENBLAS_NUM_THREADS'] = '2'
+os.environ['MKL_NUM_THREADS'] = '2'
 
 # 设置中文字体支持（兼容本地Windows和Streamlit Cloud Linux环境）
 def setup_chinese_font():
@@ -67,6 +73,12 @@ except:
     pass
 setup_chinese_font()
 
+# 清理内存的辅助函数
+def cleanup_memory():
+    """强制进行垃圾回收以释放内存"""
+    gc.collect()
+    plt.close('all')  # 关闭所有matplotlib图表
+
 # 设置页面配置
 st.set_page_config(
     page_title="PSCP WORKSHOP: 急性肾损伤(AKI)预测",
@@ -74,6 +86,15 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# 设置 matplotlib 使用非交互式后端，减少内存占用
+plt.switch_backend('Agg')
+
+# 设置 matplotlib 的内存限制
+plt.rcParams['figure.max_open_warning'] = 0  # 关闭打开图表过多的警告
+
+# 每次页面加载时清理一次内存
+cleanup_memory()
 
 # 自定义CSS样式
 st.markdown("""
@@ -122,13 +143,25 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============== 数据加载 ==============
-@st.cache_data
+@st.cache_data(ttl=3600, max_entries=1)  # 1小时过期，最多缓存1份
 def load_data():
     """加载训练数据"""
     df = pd.read_csv("splits/train.csv")
+    
+    # 如果设置了环境变量，则进行数据采样以减少内存占用
+    sample_size = os.environ.get('STREAMLIT_SAMPLE_SIZE', None)
+    if sample_size:
+        try:
+            sample_size = int(sample_size)
+            if len(df) > sample_size:
+                st.info(f"💡 演示模式：使用 {sample_size} 个样本（共 {len(df)} 个）")
+                df = df.sample(n=sample_size, random_state=42)
+        except ValueError:
+            pass
+    
     return df
 
-@st.cache_data
+@st.cache_data(ttl=3600, max_entries=1)  # 1小时过期，最多缓存1份
 def load_test_data():
     """加载测试数据（无标签）"""
     test_df = pd.read_csv("splits/test.csv")
@@ -315,7 +348,8 @@ def page_data_exploration(df):
             ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 20, 
                     f'{count}', ha='center', va='bottom', fontsize=12)
         st.pyplot(fig)
-        plt.close()
+        plt.close(fig)
+        del fig, ax  # 显式删除以释放内存
     
     st.markdown("---")
     
@@ -346,7 +380,8 @@ def page_data_exploration(df):
     
     plt.tight_layout()
     st.pyplot(fig)
-    plt.close()
+    plt.close(fig)
+    del fig, axes  # 显式删除以释放内存
     
     # 相关性热力图
     st.markdown("---")
@@ -372,7 +407,8 @@ def page_data_exploration(df):
     ax.set_title('特征相关性热力图', fontsize=14)
     plt.tight_layout()
     st.pyplot(fig)
-    plt.close()
+    plt.close(fig)
+    del fig, ax  # 显式删除以释放内存
     
     # 与目标变量的相关性排序
     st.subheader("📊 与AKI的相关性排名")
@@ -388,7 +424,8 @@ def page_data_exploration(df):
     ax.axvline(x=0, color='black', linestyle='-', linewidth=0.5)
     plt.tight_layout()
     st.pyplot(fig)
-    plt.close()
+    plt.close(fig)
+    del fig, ax, target_corr, colors, bars  # 显式删除以释放内存
 
 
 def page_feature_selection(df):
@@ -567,7 +604,12 @@ def page_feature_selection(df):
                 </div>
                 """, unsafe_allow_html=True)
                 
-                rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+                rf = RandomForestClassifier(
+                    n_estimators=100, 
+                    random_state=42, 
+                    n_jobs=2,  # 限制并行作业数
+                    max_samples=0.8  # 限制样本使用比例
+                )
                 rf.fit(X, y)
                 
                 scores = pd.DataFrame({
@@ -610,7 +652,8 @@ def page_feature_selection(df):
                 
                 plt.tight_layout()
                 st.pyplot(fig)
-                plt.close()
+                plt.close(fig)
+                del fig, ax, top_scores, colors, bars  # 显式删除以释放内存
             
             # 选中的特征
             st.markdown("---")
@@ -718,7 +761,8 @@ def page_model_training(df):
                 max_features=params.get("max_features", "sqrt"),
                 class_weight="balanced",
                 random_state=rs,
-                n_jobs=-1,
+                n_jobs=2,  # 限制并行作业数以减少内存占用
+                max_samples=0.8,  # 限制每棵树使用的样本比例以减少内存
             )
         if "梯度提升" in selected_model_key:
             return GradientBoostingClassifier(
@@ -876,13 +920,13 @@ def page_model_training(df):
             cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
             cv_scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring='roc_auc')
             
-            # 保存到session state
+            # 保存到session state（只保存必要的数据，减少内存占用）
             st.session_state['pipeline'] = pipeline
             st.session_state['feature_cols'] = feature_cols
-            st.session_state['X_val'] = X_val
-            st.session_state['y_val'] = y_val
-            st.session_state['y_proba'] = y_proba
-            st.session_state['y_pred'] = y_pred
+            # 不再保存整个验证集，只保存预测结果
+            st.session_state['y_val'] = y_val.tolist()  # 转为列表减少内存
+            st.session_state['y_proba'] = y_proba.tolist()  # 转为列表减少内存
+            st.session_state['y_pred'] = y_pred.tolist()  # 转为列表减少内存
             st.session_state['selected_model_name'] = selected_model
             
             # 显示结果
@@ -921,6 +965,10 @@ def page_model_training(df):
             """, unsafe_allow_html=True)
             
             st.success("💡 请前往 **📈 模型评估** 页面查看详细分析，或前往 **🎯 预测演示** 页面对测试集进行预测！")
+            
+            # 清理内存
+            del X_train, X_val, y_train, y_val
+            cleanup_memory()
 
 
 def page_model_evaluation(df):
@@ -940,10 +988,10 @@ def page_model_evaluation(df):
     </div>
     """, unsafe_allow_html=True)
     
-    # 获取数据
-    y_test = st.session_state['y_val']
-    y_proba = st.session_state['y_proba']
-    y_pred = st.session_state['y_pred']
+    # 获取数据（转换回numpy数组）
+    y_test = np.array(st.session_state['y_val'])
+    y_proba = np.array(st.session_state['y_proba'])
+    y_pred = np.array(st.session_state['y_pred'])
     
     st.markdown("---")
     
@@ -989,7 +1037,8 @@ def page_model_evaluation(df):
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         st.pyplot(fig)
-        plt.close()
+        plt.close(fig)
+        del fig, ax, fpr, tpr, thresholds  # 显式删除以释放内存
     
     st.markdown("---")
     
@@ -1033,7 +1082,8 @@ def page_model_evaluation(df):
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
         st.pyplot(fig)
-        plt.close()
+        plt.close(fig)
+        del fig, ax, precision, recall  # 显式删除以释放内存
     
     st.markdown("---")
     
@@ -1066,7 +1116,8 @@ def page_model_evaluation(df):
         ax.set_title('混淆矩阵', fontsize=12)
         plt.tight_layout()
         st.pyplot(fig)
-        plt.close()
+        plt.close(fig)
+        del fig, ax, cm  # 显式删除以释放内存
     
     # 分类报告
     st.markdown("---")
@@ -1226,7 +1277,8 @@ def page_prediction_demo(df):
             
             plt.tight_layout()
             st.pyplot(fig)
-            plt.close()
+            plt.close(fig)
+            del fig, ax, theta, r, colors_bg  # 显式删除以释放内存
         
         with col2:
             if probability >= 0.5:
@@ -1309,7 +1361,8 @@ def page_prediction_demo(df):
             ax.legend()
             plt.tight_layout()
             st.pyplot(fig)
-            plt.close()
+            plt.close(fig)
+            del fig, ax  # 显式删除以释放内存
             
             # 显示预测结果预览
             st.markdown("**预测结果预览：**")
